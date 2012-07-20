@@ -7,13 +7,14 @@ from callback_stream import CallbackStream
 from struct import pack, unpack
 from lib import command
 from or_helpers_stream import HelpersStream
+from run_commands import RunCommands
+
+import GUI_helpers as gh
 
 import sys, glob
 import time
 
 imudata = []
-samples = 0
-file = ''
 
 def xb_send(val):
 	outgoing = ('packet',val.data[0], val.data [1])
@@ -23,33 +24,64 @@ def OptitrakUpdate(val):
 	o.update(val)
 
 def imudataUpdate(val):
-	data = val.data
+	h.setImuData(val.data[0], val.data[1])
 
 def setupFile(val):
 	file = h.findFileName()
-	print file
+	h.setFileName(file)
+	gh.setDataFileName(file)
 
 def getnumSamples(val):
 	samples = h.calcNumSamples(val.data)
 
+def setMotor_Gains(val):
+	h.setMotorGainsSet()
+
+def setSteer_Gains(val):
+	h.setSteeringGainsSet()
+
+def setSteer_Rate(val):
+	h.setSteeringRateSet()
+
+def setNumSamples(val):
+	t.setNumSamples(val.data)
+
+def setCount2Deg(val):
+	h.setCount2Deg(val.data)
+
+def setBytesIn(val):
+	h.setBytesIn()
+
+def setFlashErased(val):
+	h.setFlashErase()
+
+def runRobot(val):
+	t.setAddr(val.data[0])
+	t.setMove(val.data[1])
+	t.runCommands()
+
 def basestationReset(val):
-	addr = val.data
-	h.resetRobot(addr)
+	h.resetRobot(val.data)
 
 def basestationMotor(val):
+	print 'call motor'
 	h.setMotorGains(val.data[0], val.data[1])
 
 def basestationThrot(val):
+	print 'call throt'
 	h.setMotorSpeeds(val.data[0], val.data[1], val.data[2])
 
 def basestationSteer(val):
-	h.setSteeringGains(val.data[0], val.data[1])
+	print 'call gains'
+	h.put([val.type, val.data[0], val.data[1]])
 
 def basestationTurning(val):
-	h.setSteeringRate(val.data[0], val.data[1])
+	print 'call turning'
+	h.put([val.type, val.data[0], val.data[1]])
 
 def basestationMove(val):
-	h.sendMoveQueue(val.data[0], val.data[1])
+	print 'call move'
+	h.put([val.type,val.data[0], val.data[1]])
 
 def basestationQuit(val):
 	input_data = ('quit','quit')
@@ -57,10 +89,9 @@ def basestationQuit(val):
 
 def stream_telemetry(val):
 	numSamples = 100
-	h.startTelemetryStream(val.data, numSamples)
+	h.startTelemetryStream(val.data)
 
 def robotData(val):
-	print val
 	cal.xbee_received(val.data[2])
 
 def callback_stream(val):
@@ -68,24 +99,21 @@ def callback_stream(val):
 	f.write(val.data + '\n')
 	f.close()
 
-def flashMemory(val):
-	print val.type
-	print samples
-	self.addr = val.data
-	if val.type == 'erase_flash':
-		h.eraseFlashMem(self.addr, samples)
-	elif val.type == 'save_telem':
-		h.startTelemetrySave(self.addr, samples)
-	elif val.type == 'read_telem':
-		h.downloadTelemetry(self.addr, samples)
+def eraseFlashMemory(val):
+	print ('erase flash called')
+	h.put([val.type, val.data[0], val.data[1]])
+
+def saveTelemetry(val):
+	print ('save telemetry called')
+	h.put([val.type, val.data[0], val.data[1]])
+
+def readTelemetry(val):
+	h.put([val.type, val.data[0], val.data[1]])
 
 g = GUIStream(sinks = {'reset':[basestationReset], 'quit':[basestationQuit],
 						 'motor':[basestationMotor], 'throt_speed':[basestationThrot],
-						 'move':[basestationMove], 'steer_gains':[basestationSteer],
-						 'turning_rate':[basestationTurning], 'file':[setupFile],
-						 'stream_telem':[stream_telemetry], 'erase_flash':[flashMemory],
-						 'save_telem':[flashMemory], 'read_telem':[flashMemory], 'imusamples':[getnumSamples]}, 
-						 callbacks = None, autoStart = False)
+						 'file':[setupFile], 'stream_telem':[stream_telemetry], 'imu_samples':[getnumSamples], 
+						 'run_commands':[runRobot]}, callbacks = None, autoStart = False)
 
 #o = OptitrakStream(sinks = {'optitrak_data':[OptitrakUpdate]}, autoStart = False)
 
@@ -95,9 +123,16 @@ g = GUIStream(sinks = {'reset':[basestationReset], 'quit':[basestationQuit],
 
 b = BasestationStream(sinks = {'robot_data':[robotData]}, callbacks = None)
 
-cal = CallbackStream(sinks = {'streaming_data':[callback_stream], 'special_telem':[imudataUpdate]}, callbacks = None)
+cal = CallbackStream(sinks = {'streaming_data':[callback_stream], 'special_telem':[imudataUpdate], 
+										'steering_rate_set':[setSteer_Rate], 'motor_gains_set':[setMotor_Gains], 
+										'steering_gains_set':[setSteer_Gains], 'bytes_in':[setBytesIn], 'flash_erased':[setFlashErased],
+										'turning_rate':[setCount2Deg]}, callbacks = None)
 
-h = HelpersStream(sinks = {'xb_send':[xb_send]}, callbacks = None)
+h = HelpersStream(sinks = {'xb_send':[xb_send], 'num_samples':[setNumSamples]}, callbacks = None, fileName = None)
+
+t = RunCommands(sinks = {'erase_flash':[eraseFlashMemory], 'save_telem':[saveTelemetry],
+							 'steer_gains':[basestationSteer], 'turning_rate':[basestationTurning],
+							 'read_telem':[readTelemetry], 'move':[basestationMove]}, callbacks = None, move = None, addr = None)
 
 time.sleep(0.5)
 
