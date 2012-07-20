@@ -4,13 +4,12 @@ from wxPython.wx import *
 from wxPython.lib.dialogs import *
 import threading
 
-import shared
-import GUI_helpers as gui_h
 import sys, time, traceback
 from basestation_stream import BasestationStream
 from asynch_dispatch import *
 from optitrak_stream import OptitrakStream
 from or_helpers_stream import HelpersStream
+import GUI_helpers as gh
 
 from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg
 from matplotlib.backends.backend_wx import NavigationToolbar2Wx
@@ -42,26 +41,6 @@ class GUIStream(threading.Thread):
 	def add_sinks(self,sinks):
 		self.dispatcher.add_sinks(sinks)
 
-class threadedRunCommands(threading.Thread):
-	def __init__(self, move, addr):
-		threading.Thread.__init__(self)
-		self.daemon = True
-		self.move = move
-		self.addr = addr
-
-		self.start()
-
-	def run(self):
-		steeringGains = [0,0,0,0,0,0] # Disables steering controller
-		dispatcher.dispatch(Message('imu_samples', self.move))
-		dispatcher.dispatch(Message('steer_rate', [self.addr,0]))
-		dispatcher.dispatch(Message('steer_gains',[self.addr, steeringGains]))
-		dispatcher.dispatch(Message('erase_flash',self.addr))
-		dispatcher.dispatch(Message('save_telem', self.addr))
-#		dispatcher.dispatch(Message('stream_telem', self.addr ))
-		dispatcher.dispatch(Message('move', [self.addr, self.move]))
-		dispatcher.dispatch(Message('read_telem', self.addr))
-
 #The main page of the program
 class PageOne(wx.Panel):
 	def __init__(self,parent): 
@@ -90,7 +69,7 @@ class PageOne(wx.Panel):
 		self.roboSelect.Append("2")
 		self.roboSelect.Append("3")
 		self.roboSelect.Append("4")
-		self.robotSelect.Append("xffff")
+		self.roboSelect.Append("xffff")
 		tbs1.Add(self.roboSelect,2, wx.GROW|wx.ALL,5)
 		self.Bind(wx.EVT_LISTBOX, self.OnSelect, self.roboSelect)
 
@@ -125,8 +104,7 @@ class PageOne(wx.Panel):
 		self.Bind(wx.EVT_BUTTON, self.slowButtonClick, self.slowB)
 
 		#text area for output data
-		self.outputData = wx.TextCtrl(self, size=(300,100),style = wx.TE_MULTILINE|wx.TE_READONLY
-									  |wx.HSCROLL|wx.TE_RICH2)
+		self.outputData = wx.TextCtrl(self, size=(300,100),style = wx.TE_MULTILINE|wx.TE_READONLY|wx.HSCROLL)
 		self.outputData.WriteText("This Displays ouput data...\n")
 		tbs3.Add(self.outputData,1,wx.GROW|wx.ALL,5)
 		tbs1.Add(tbs3,6,wx.EXPAND,5)
@@ -256,8 +234,9 @@ class PageOne(wx.Panel):
 		self.inputGrid.DeleteRows(numRows-1,1)
 		
 	def runComButtonClick(self, e):
-		move = gui_h.setupMoveq(self.inputGrid)
-		threadedRunCommands(move, self.addr)
+		move = gh.setupMoveq(self.inputGrid)
+		dispatcher.dispatch(Message('imu_samples', move))
+		dispatcher.dispatch(Message('run_commands',[self.addr, move]))
 		
 	def loadPreButtonClick(self, e):
 		lst = ["Constant", "Ramp", "Sine"]
@@ -265,7 +244,7 @@ class PageOne(wx.Panel):
 	
 		if (dlg.ShowModal() == wx.ID_OK):
 			select = dlg.GetSelection()
-			gui_h.gridPreset(self.inputGrid, select)
+			gh.gridPreset(self.inputGrid, select)
 		dlg.Destroy()
 	
 	def saveDataButtonClick(self,e):
@@ -291,7 +270,7 @@ class RedirectText(object):
 		self.out=aWxTextCtrl
 
 	def write(self, string):
-		wx.CallAfter(self.out.WriteText, string)
+		wx.CallAfter(self.out.WriteText, string.decode('latin-1'))
 
 #The interface to defining a save directory for data files
 class PageTwo(wx.Panel):
@@ -322,7 +301,6 @@ class PageTwo(wx.Panel):
 		dlg.Destroy()
 		self.pathway.WriteText(self.dirname)
 
-#		gui_h.saveData(self.dirname)
 #The plots for graphing data
 class PageThree(wx.Panel):
 	def __init__(self, parent):
@@ -347,7 +325,7 @@ class PageThree(wx.Panel):
 		self.Fit()
 		
 	def plotLastButtonClick(self, evt):
-		gui_h.plotGraph(self.figure)
+		gh.plotGraph(self.figure)
 		self.canvas.draw()
 	
 #This class sets up the grid for inputGrid and outputs
@@ -453,11 +431,10 @@ class ThreadedFrame(wx.Frame):
 		dispatcher.dispatch(Message('file', None))
 
 		dispatcher.dispatch(Message('reset', self.addr))
-
+		time.sleep(0.15)
 		#motorgains = [200,2,0,2,0,    200,2,0,2,0]
 		motorgains = [5000,100,0,0,0,5000,100,0,0,0] #Hardware PID
 
-#		motor = [self.addr, motorgains]
 		dispatcher.dispatch(Message('motor', [self.addr, motorgains]))
 
 	def OnAbout(self,e):
