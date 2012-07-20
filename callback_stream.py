@@ -51,7 +51,6 @@ class CallbackStream(threading.Thread):
 	#XBee callback function, called every time a packet is recieved
 	def xbee_received(self, packet):
 			rf_data = packet
-			print rf_data
 			#rssi = ord(packet.get('rssi'))
 			#(src_addr, ) = unpack('H', packet.get('source_addr'))
 			#id = packet.get('id')
@@ -96,20 +95,19 @@ class CallbackStream(threading.Thread):
 						print "Set PID gains"
 						gains = unpack(pattern, data)
 						print gains
-						shared.motor_gains_set = True 
+						self.dispatcher.dispatch(Message('motor_gains_set', gains)) 
 					# SET_STEERING_GAINS
 					elif type == command.SET_STEERING_GAINS:
 						print "Set Steering gains"
 						gains = unpack(pattern, data)
 						print gains
-						shared.steering_gains_set = True
+						self.dispatcher.dispatch(Message('steering_gains_set', gains))
 					# SET_CTRLD_TURN_RATE
 					elif type == command.SET_CTRLD_TURN_RATE:
 						print "Set turning rate"
 						rate = unpack(pattern, data)[0]
-						print "degrees: ",shared.count2deg * rate
-						print "counts: ", rate
-						shared.steering_rate_set = True
+						self.dispatcher.dispatch(Message('turn_rate', rate))
+						self.dispatcher.dispatch(Message('steering_rate_set', rate))
 					# STREAM_TELEMETRY
 					elif type == command.STREAM_TELEMETRY:
 							print "Streaming telemtry packet:"
@@ -124,28 +122,26 @@ class CallbackStream(threading.Thread):
 							telem_index = datum.pop(0) #pop removes this from data array
 							#print "Special Telemetry Data Packet #",telem_index
 							if (datum[0] != -1) and (telem_index) >= 0:
-									shared.imudata[telem_index] = datum
+#									shared.imudata[telem_index] = datum
 									output_data = [telem_index,datum]
 									self.dispatcher.dispatch(Message('special_telem',output_data))
-									shared.bytesIn = shared.bytesIn + (2*4 + 15*2)
+									self.dispatcher.dispatch(Message('bytes_in', 'bytes_in'))
 					# ERASE_SECTORS
 					elif type == command.ERASE_SECTORS:
 							datum = unpack(pattern, data)
-							#if datum[0] == 0:
-							#    shared.flash_erased = True
-							shared.flash_erased = datum[0]
+							self.dispatcher.dispatch(Message('flash_erased', datum[0]))
 					# SLEEP
 					elif type == command.SLEEP:
 							datum = unpack(pattern, data)
 							print "Sleep reply: ",datum[0]
 							if datum[0] == 0:
-									shared.awake = True;
+								self.dispatcher.dispatch(Message('awake', 'awake'))
 					# SET_HALL_GAINS
 					elif type == command.SET_HALL_GAINS:
 							print "Set Hall Effect PID gains"
 							gains = unpack(pattern, data)
 							print gains
-							shared.motor_gains_set = True 
+							self.dispatcher.dispatch(Message('motor_gains_set', gains))
 					# ZERO_POS
 					elif type == command.ZERO_POS:
 							print 'Hall zeros established; Previous motor positions:',
