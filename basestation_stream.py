@@ -61,7 +61,6 @@ class BasestationStream(threading.Thread):
 			return None
 
 	def put(self,entry):
-		print entry
 		self.send_queue.put(entry)
 
 	def receiveCallback(self,xbee_data):

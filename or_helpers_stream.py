@@ -5,13 +5,12 @@ from lib import command
 from callback_stream import CallbackStream
 import datetime
 import serial
-import shared
 from struct import pack
 from xbee import XBee
 from math import ceil,floor
 import numpy as np
 from asynch_dispatch import *
-
+import threading, Queue
 ## Constants
 ###
 MOVE_SEG_CONSTANT = 0
@@ -30,23 +29,89 @@ STEER_MODE_INCREASE = 1
 STEER_MODE_SPLIT = 2
 
 class HelpersStream(threading.Thread):
-	def __init__(self, sinks = None, callbacks = None):
+	def __init__(self, sinks = None, callbacks = None, fileName = ''):
 		threading.Thread.__init__(self)
 		self.daemon = True
 
 		self.dispatcher = AsynchDispatch(sinks=sinks, callbacks = callbacks)
+		self.fileName = fileName
+
+		self.imudata = []
+		self.fileName = ''
+		self.steering_rate_set = False
+		self.motor_gains_set = False
+		self.steering_rate_set = False
+		self.flash_erased = False
+		self.leadinTime = 0
+		self.leadoutTime = 0
+		self.angRateDeg = 0
+		self.deg2count = 0
+		self.count2deg = 0
+		self.angRate = 0
+
+		self.command_queue = Queue.Queue()
 
 		self.start()
 
-	def run(self):
-		while True:
-			pass
+	def setFileName(self, fileName):
+		self.fileName = fileName
+		print self.fileName
 
 	def put(self, data):
-		self.dispatcher.put(message)
+		self.command_queue.put(data)
   
 	def add_sinks(self,sinks):
 		self.dispatcher.add_sinks(sinks)
+
+	def setImuData(self, telem_index, data):
+		self.imudata[telem_index] = data
+
+	def setMotorGainsSet(self):
+		self.motor_gains_set = True
+	
+	def setSteeringGainsSet(self):
+		self.steering_gains_set = True
+
+	def setSteeringRateSet(self):
+		self.steering_rate_set = True
+
+	def setBytesIn(self):
+		self.bytesIn = self.bytesIn + (2*4 + 15*2)
+
+	def setCount2Deg(self, rate):
+		self.Count2Deg = self.Count2Deg * rate
+		print "degrees: ", self.Count2Deg
+		print "counts: ", rate
+
+	def setFlashErase(self):
+		self.flash_erased = True
+
+	def run(self):
+		while True:
+
+			if not self.command_queue.empty():
+				data = self.command_queue.get()
+
+				if data[0] == 'turning_rate':
+					self.setSteeringrate(data[1], data[2])
+				elif data[0] == 'steer_gains':
+					self.setSteeringGains(data[1], data[2])
+				elif data[0] == 'erase_flash':
+					self.eraseFlashMem(data[1], data[2])
+				elif data[0] == 'save_telem':
+					self.startTelemetrySave(data[1], data[2])
+				elif data[0] == 'stream_telem':
+					self.startTelemetryStream(data[1], data[2])
+				elif data[0] == 'move':
+					self.sendMoveQueue(data[1], data[2])
+				elif data[0] == 'read_telem':
+					self.downloadTelemetry(data[1], data[2])
+
+				time.sleep(0.25)
+			else:
+				pass
+
+
 ########## Helper functions #################
 	def xb_send(self, DEST_ADDR, status, type, data):
 		payload = chr(status) + chr(type) + ''.join(data)
@@ -55,11 +120,10 @@ class HelpersStream(threading.Thread):
 
 	def xb_safe_exit(self):
 		print "Halting xb"
-		shared.xb.halt()
+		self.xb.halt()
 		print "Closing serial"
-		shared.ser.close()
+		self.ser.close()
 		print "Exiting..."
-		sys.exit(1)
 
 	def resetRobot(self, DEST_ADDR):
 		print "Resetting robot..."
@@ -86,17 +150,17 @@ class HelpersStream(threading.Thread):
 
 		fileout = open(dataFileName,'w')
 		#write out parameters
-		fileout.write('% ' + now.strftime("%m/%d/%Y %H:%M") + '\n')
-		fileout.write('%  Comments: \n')
-		fileout.write('%  angrate (deg) = ' + str(shared.angRateDeg) + '\n')
-		fileout.write('%  angrate (raw) = ' + str(shared.angRate) + '\n')
-		fileout.write('%  motorgains    = ' + repr(shared.motorGains) + '\n')
-		fileout.write('%  steeringGains = ' + repr(shared.steeringGains) + '\n')
-		fileout.write('%  runtime       = ' + repr(shared.runtime) + '\n')
-		fileout.write('%  numSamples    = ' + repr(shared.numSamples) + '\n')
-		fileout.write('%  moveq         = ' + repr(shared.moveq) + '\n')
-		fileout.write('% Columns: \n')
-		fileout.write('% time | Llegs | Rlegs | DCL | DCR | GyroX | GyroY | GyroZ | GryoZAvg | AccelX | AccelY |AccelZ | LBEMF | RBEMF | SteerOut | Vbatt | SteerAngle\n')
+		fileout.write('# ' + now.strftime("%m/%d/%Y %H:%M") + '\n')
+		fileout.write('#  Comments: \n')
+		fileout.write('#  angrate (deg) = ' + str(self.angRateDeg) + '\n')
+		fileout.write('#  angrate (raw) = ' + str(self.angRate) + '\n')
+		fileout.write('#  motorgains    = ' + repr(self.motorGains) + '\n')
+		fileout.write('#  steeringGains = ' + repr(self.steeringGains) + '\n')
+		fileout.write('#  runtime       = ' + repr(self.runtime) + '\n')
+		fileout.write('#  numSamples    = ' + repr(self.numSamples) + '\n')
+		fileout.write('#  moveq         = ' + repr(self.moveq) + '\n')
+		fileout.write('# Columns: \n')
+		fileout.write('# time | Llegs | Rlegs | DCL | DCR | GyroX | GyroY | GyroZ | GryoZAvg | AccelX | AccelY |AccelZ | LBEMF | RBEMF | SteerOut | Vbatt | SteerAngle\n')
 		fileout.close()
 
 	def dlProgress(self, current, total):
@@ -107,51 +171,52 @@ class HelpersStream(threading.Thread):
 		#sys.stdout.write("\r" + "Downloading ...%d%%   " % percent)
 		sys.stdout.write("\r" + str(current).rjust(5) +"/"+ str(total).ljust(5) + "   ")
 		sys.stdout.write(barstring)
-		sys.stdout.flush()
+#		sys.stdout.flush()
 
 	def sendEcho(self, msg):
 		self.xb_send(DEST_ADDR, 0, command.ECHO, msg)
 
-	def downloadTelemetry(self, numSamples):
+	def downloadTelemetry(self, DEST_ADDR, numSamples):
 		#Wait for run length before starting download
-		time.sleep((shared.runtime + shared.leadinTime + shared.leadoutTime)/1000.0 + 1)
+		time.sleep((self.runtime + self.leadinTime + self.leadoutTime)/1000.0 + 1)
 
 		print "started readback"
 		self.xb_send(DEST_ADDR, 0, command.FLASH_READBACK, pack('=L',numSamples))
 	 
+		# While downloading via callbackfunc, write parameters to start of file
+		self.writeFileHeader(self.fileName)
+
 		dlStart = time.time()
-		shared.last_packet_time = dlStart
-		shared.bytesIn = 0
-		while shared.imudata.count([]) > 0:
+		self.last_packet_time = dlStart
+		self.bytesIn = 0
+		while self.imudata.count([]) > 0:
 			time.sleep(0.1)
-			#print "Downloading ...",(n-shared.imudata.count([])),"/",n
-			dlProgress(numSamples -shared.imudata.count([]) , numSamples)
-			if (time.time() - shared.last_packet_time) > shared.readback_timeout:
-				print "\nReadback timeout exceeded, restarting."
-				raw_input("Press Enter to start readback ...")
-				shared.imudata = [ [] ] * numSamples
-				print "started readback"
-				dlStart = time.time()
-				shared.last_packet_time = dlStart
-				self.xb_send(DEST_ADDR, \
-								0, command.FLASH_READBACK, pack('=L',numSamples))
+			#print "Downloading ...",(n-self.imudata.count([])),"/",n
+			self.dlProgress(numSamples -self.imudata.count([]) , numSamples)
+#			if (time.time() - self.last_packet_time) > self.readback_timeout:
+#				print "\nReadback timeout exceeded, restarting."
+#				self.imudata = [ [] ] * numSamples
+#				print "started readback"
+#				dlStart = time.time()
+#				self.last_packet_time = dlStart
+#				self.xb_send(DEST_ADDR, 0, command.FLASH_READBACK, pack('=L',numSamples))
 
 		dlEnd = time.time()
 		#Final update to download progress bar to make it show 100%
-		dlProgress(numSamples-shared.imudata.count([]) , numSamples)
+		self.dlProgress(numSamples-self.imudata.count([]) , numSamples)
 		print "\nTime: %.2f s ,  %.3f KBps" % ( (dlEnd - dlStart), \
-												shared.bytesIn / (1000*(dlEnd - dlStart)))
+												self.bytesIn / (1000*(dlEnd - dlStart)))
 
 		print "readback done"
-		fileout = open(shared.dataFileName, 'a')
-		np.savetxt(fileout , np.array(shared.imudata), '%d', delimiter = ' ')
+		fileout = open(self.fileName, 'a')
+		np.savetxt(fileout , np.array(self.imudata), '%d', delimiter = ' ')
 
-		print "data saved to ",shared.dataFileName
+		print "data saved to ",self.fileName
 		#Done with flash download and save
 
 	def wakeRobot(self):
-		shared.awake = 0;
-		while not(shared.awake):
+		self.awake = 0;
+		while not(self.awake):
 			print "Waking robot ... "
 			self.xb_send(DEST_ADDR, 0, command.SLEEP, pack('b',0))
 			time.sleep(0.2)
@@ -162,22 +227,23 @@ class HelpersStream(threading.Thread):
 
 	def setSteeringRate(self, rate):
 		count = 1
-		deg2count = 14.375
-		count2deg = 1/deg2count
-		angRate = round(angRateDeg / count2deg)
-#		while not(shared.steering_rate_set):
+		self.angRateDeg = rate
+		self.deg2count = 14.375
+		self.count2deg = 1/self.deg2count
+		self.angRate = round( self.angRateDeg / self.count2deg)
+#		while not(self.steering_rate_set):
 		print "Setting steering rate...   ",count,"/8"
 		count = count + 1
-		self.xb_send(DEST_ADDR, 0, command.SET_CTRLD_TURN_RATE, pack('h',shared.angRate))
+		self.xb_send(DEST_ADDR, 0, command.SET_CTRLD_TURN_RATE, pack('h',self.angRate))
 		time.sleep(0.3)
 #			if count > 8:
 #				print "Unable to set steering rate, exiting."
-#				xb_safe_exit()
+	#			xb_safe_exit()
 
 	def setMotorGains(self, DEST_ADDR, gains):
 		count = 1
 		self.motorGains = gains
-#		while not(shared.motor_gains_set):
+#		while not(self.motor_gains_set):
 		print "Setting motor gains...   ",count,"/8"
 		self.xb_send(DEST_ADDR, \
 						0, command.SET_PID_GAINS, pack('10h',*gains))
@@ -188,8 +254,8 @@ class HelpersStream(threading.Thread):
 
 	def setSteeringGains(self, DEST_ADDR, gains):
 		count = 1
-		steeringGains = gains
-#		while not (shared.steering_gains_set):
+		self.steeringGains = gains
+#		while not (self.steering_gains_set):
 		print "Setting steering gains...   ",count,"/8"
 		self.xb_send(DEST_ADDR, \
 						0, command.SET_STEERING_GAINS, pack('6h',*gains))
@@ -203,7 +269,7 @@ class HelpersStream(threading.Thread):
 		self.xb_send(DEST_ADDR, \
 						0, command.ERASE_SECTORS, pack('L',numSamples))
 		print "started flash erase ...",
-		while not (shared.flash_erased):
+		while not (self.flash_erased):
 			time.sleep(0.25)
 			sys.stdout.write('.')
 			if (time.time() - eraseStartTime) > 8:
@@ -213,13 +279,13 @@ class HelpersStream(threading.Thread):
 		print "\nFlash erase done."
 
 	def startTelemetrySave(self, DEST_ADDR, numSamples):
-		shared.numSamples = numSamples
+		self.numSamples = numSamples
 		print "started save"
 		self.xb_send(DEST_ADDR, \
 						0, command.SPECIAL_TELEMETRY, pack('L',numSamples))
 
 	def sendMoveQueue(self, DEST_ADDR, moveq):
-		shared.moveq = moveq
+		self.moveq = moveq
 		nummoves = moveq[0]
 		self.xb_send(DEST_ADDR, \
 						0, command.SET_MOVE_QUEUE, pack('=h'+nummoves*'hhLhhhh', *moveq))
@@ -230,18 +296,14 @@ class HelpersStream(threading.Thread):
 						0, command.SET_THRUST_CLOSED_LOOP, pack('5h',*thrust))
 
 	def calcNumSamples(self, moveq):
-		leadinTime = 500
-		leadoutTime = 500
+		self.leadinTime = 500
+		self.leadoutTime = 500
 		#Calculates the total movement time from the move queue above
-		runtime = sum([moveq[i] for i in [ind*7+3 for ind in range(0,moveq[0])]])
+		self.runtime = sum([moveq[i] for i in [ind*7+3 for ind in range(0,moveq[0])]])
 	 
 		#calculate the number of telemetry packets we expect
-		n = int(ceil(150 * (runtime + leadinTime + leadoutTime) / 1000.0))
+		n = int(ceil(150 * (self.runtime + self.leadinTime + self.leadoutTime) / 1000.0))
 		#allocate an array to write the downloaded telemetry data into
-		shared.imudata = [ [] ] * n
+		self.imudata = [ [] ] * n
 		print "Samples: ",n
-		return n
-
-	def startTelemetryStream(self, DEST_ADDR, numSamples):
-		self.xb_send(DEST_ADDR, \
-						0, command.STREAM_TELEMETRY, pack('L',numSamples))
+		self.dispatcher.dispatch(Message('num_samples',n))
